@@ -448,19 +448,7 @@ pip uninstall claude-skill-factory
 - 18-check `doctor` + 항목별 트러블슈팅 힌트
 - 글로벌 `--verbose` / `--no-auto-invoke` 플래그
 - PyPI 호환 패키징 (LICENSE/README sdist 포함)
-
-### 🚧 v1.0 (planned)
-- [ ] PyPI 첫 publish (`0.2.0a1` 또는 `0.2.0`)
-- [ ] GitHub Actions CI (pytest + ruff + wheel smoke)
-- [ ] 실 Claude Code dogfooding 1주+ 결과 반영
-- [ ] Linux 실측 검증
-- [ ] Skill name 충돌 감지 (이름이 같은 user-installed skill 존재 시)
-
-### 🔮 v0.3+ ideas
-- [ ] `portalocker` 어댑터로 Windows 실 지원
-- [ ] 다국어 룰 확장 (일/중/스페인어 등)
-- [ ] `paths` frontmatter 자동 추론
-- [ ] 분석 캐싱 (incremental scan)
+- Skill name 충돌 감지 (`promote` / `create` → `EXIT_CONFLICT`, `doctor` 항목)
 
 전체 변경 이력은 [`CHANGELOG.md`](./CHANGELOG.md), 페이즈별 개발 기록은 [`dev-plan/`](./dev-plan).
 
