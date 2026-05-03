@@ -2,6 +2,39 @@
 
 All notable changes to Claude Skill Factory are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/), and the project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-05-03
+
+Distribution-readiness release. Adds three new lifecycle commands, user-defined rules, exit-code standardization, structured logging, and PyPI-compatible packaging. 165 tests passing (was 131).
+
+### Added
+
+- **`uninstall` command** — removes the factory's three hook entries from `.claude/settings.json` while preserving any user-defined hooks; backs up the original to `.bak.<timestamp>`. With `--keep-data` retains `prompt-history/` / `skill-suggestions/` / `skills/`; without it (and after confirmation) cleans them too. Idempotent: prints `Already uninstalled.` if our hooks aren't present.
+- **`rotate` command** — archives `prompts.jsonl` / `turns.jsonl` / `tool_uses.jsonl` to `<file>.<UTC-timestamp>.bak.jsonl` when size (default ≥ 50 MB) or age (default ≥ 30 days) exceeds thresholds. `--dry-run` reports without touching disk.
+- **`verify` command** — validates a generated `SKILL.md` against the template spec: 6 required frontmatter fields, kebab-case `name`, ≤ 1,536-char `description + when_to_use`, 4 required body sections (When to use / Goal / Workflow / Output format). `--all` checks every installed skill at once. Exits 1 if any errors; warnings alone don't fail.
+- **`--no-auto-invoke` flag** on `promote` and `create` — emits `disable-model-invocation: true` in the SKILL.md frontmatter for skills the user wants only manually invoked.
+- **Global `--verbose / -v` flag** — wires `setup_logger(verbose=True)` so every command can print DEBUG-level diagnostics on stderr.
+- **User-defined rules file** — `<claude_home>/skill-factory/user_rules.json` (`{"rules":[...]}`) is loaded and merged with built-ins. Built-ins win for `get_rule(name)` lookups (deterministic baseline), but user rules participate fully in `classify_prompt`. Missing or malformed file → silent empty list with stderr warning, never blocks the factory.
+- **`logging_setup`, `rotation`, `user_rules`, `verifier` modules** — re-exported from the top-level `skill_factory` package.
+
+### Changed
+
+- **Standardized exit codes** — every CLI failure now uses one of: `0` (ok), `1` (`EXIT_HEALTH` — doctor / integrity), `2` (`EXIT_USAGE` — bad args / not found), `3` (`EXIT_CONFLICT` — name collision), `4` (`EXIT_PERMISSION` — ignored guard rails). Tests now assert specific codes rather than `!= 0`.
+- **`promote` / `create`** — refuse to write a `SKILL.md` if one already exists at the target path unless `--overwrite` is passed; exits with `EXIT_CONFLICT` (3) and a friendly hint.
+- **`doctor`** — 18 checks (was 16), with two new entries: `no skill name conflicts` and `prompts.jsonl freshness` (the latter as a non-fatal warning when size > 100 MB or mtime > 30 days). Every check that fails or warns now carries a `troubleshoot:` field with a concrete next action ("Run `init` from a venv-activated shell.", "Run `claude-skill-factory rotate` to archive old entries.", etc.). `--json` output gains a top-level `warnings` array alongside the existing `checks`.
+- **PyPI packaging** — `pyproject.toml` now uses `license = { file = "LICENSE" }` and `readme = "README.md"`; sdist via the new `MANIFEST.in` includes `LICENSE`, `README.md`, `CHANGELOG.md`, `AGENTS.md`, the entire `docs/` and `scripts/` trees (via in-package symlinks). The wheel `METADATA` declares `License-File: LICENSE` and `Description-Content-Type: text/markdown`.
+- **`SKILL.md.j2`** — `disable-model-invocation` is now variable-driven (`{{ disable_model_invocation | string | lower }}`) so `--no-auto-invoke` can flip it without a template change.
+- **`render_skill`** signature gains `disable_auto_invocation: bool = False`.
+
+### Tests
+
+- 165 tests across 18 files (was 131 / 14), all passing in ~10 s.
+- New: `test_logging_setup` (3), `test_user_rules` (4), `test_rotation` (5), `test_verifier` (5), plus 14 new CLI cases (conflict detection, exit-code assertions, uninstall scenarios, rotate dry-run, verify against real skills, `--no-auto-invoke`).
+- Lint clean.
+
+### Known limits (carried forward; deferred)
+
+Same as v0.1.0: no jsonl rotation built into the hook path itself (use `rotate` periodically), Windows is best-effort, no GitHub Actions CI, not on PyPI yet (wheel verified locally), real Claude Code dogfooding still pending.
+
 ## [0.1.0] — 2026-05-03
 
 Initial alpha. Claude Code-native rebuild of the upstream Codex Prompt Skill Factory reference; not API-compatible with Codex.

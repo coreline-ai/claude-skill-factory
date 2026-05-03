@@ -120,7 +120,16 @@ inbox / scan                                             dashboard
 | `dashboard.py` | 294 | build_dashboard_data, render_dashboard_html (cards) |
 | `templates/SKILL.md.j2` | – | Jinja2 source for the Skill output |
 
-Total source: ~3,810 LOC. Tests: ~2,138 LOC across 12 files (124 cases).
+Plus four lifecycle helpers added in v0.2.0:
+
+| Module | What it owns |
+|---|---|
+| `logging_setup.py` | stdlib logger configuration; idempotent `setup_logger(verbose)` + `get_logger()` |
+| `user_rules.py` | loads `<claude_home>/skill-factory/user_rules.json` into `SkillRule` objects (silent on missing/malformed) |
+| `rotation.py` | `rotate_jsonl(path, max_size_mb, max_age_days, dry_run)` returning a `RotationResult` |
+| `verifier.py` | `verify_skill_md(path)` returning `VerifyResult(ok, errors, warnings)` per skill_template_spec.md §2-§4 |
+
+Total source: ~4,400 LOC. Tests: ~2,400 LOC across 18 files (165 cases).
 
 ## 6. CLI command catalog (full)
 
@@ -150,7 +159,19 @@ Total source: ~3,810 LOC. Tests: ~2,138 LOC across 12 files (124 cases).
 `enrich [NAME]` — re-compile `skill_spec` for one or all candidates.
 `create NAME --force` — write `SKILL.md` without going through the approval state machine. Requires `--force`.
 
-### 6.4 Hidden hook commands
+`promote` and `create` accept `--no-auto-invoke` (since v0.2.0) to emit `disable-model-invocation: true` in the skill frontmatter, and refuse to overwrite an existing `SKILL.md` without `--overwrite` (`EXIT_CONFLICT`, code 3).
+
+### 6.4 Lifecycle (v0.2.0)
+
+`uninstall [--keep-data]` — removes our three hook entries from `settings.json` (matched by slug, so PATH or `--project` differences don't matter), preserves any user-defined hooks, backs up to `.bak.<ts>`, and (unless `--keep-data`) deletes the prompt-history / suggestions / skills directories after confirmation.
+
+`rotate [--max-size-mb 50] [--max-age-days 30] [--dry-run]` — archives `prompts.jsonl` / `turns.jsonl` / `tool_uses.jsonl` to `<file>.<UTC-timestamp>.bak.jsonl` when either threshold trips. Reports per-file via Rich table.
+
+`verify [NAME] [--all]` — runs the SKILL.md validator (`skill_factory.verifier.verify_skill_md`) against installed skills. Errors fail the run (exit 1); warnings are reported but non-fatal.
+
+Standardized exit codes (since v0.2.0): `0` ok, `1` health/integrity, `2` usage, `3` conflict, `4` permission.
+
+### 6.5 Hidden hook commands
 
 `hook-user-prompt`, `hook-stop`, `hook-post-tool-use` — reserved for Claude Code. Each takes only `--project`, reads stdin, calls the matching `handle_*` from `hook_handlers`, **always** prints `{"continue": true, "suppressOutput": true}`, **always** exits 0.
 

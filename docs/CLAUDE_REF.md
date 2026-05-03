@@ -2,7 +2,7 @@
 
 > **Purpose**: a single file an AI agent can load to get oriented in this repository fast. If you are Claude Code reading this in a fresh session, start here.
 >
-> **Status**: v0.1.0, regenerated 2026-05-03 against the post-build-out state. All file sizes were measured with `wc -l` at this commit; if they're more than ±2 off, the doc is stale and you should re-measure before quoting them.
+> **Status**: v0.2.0, regenerated 2026-05-03 after the distribution-readiness patch set. Line counts were measured with `wc -l` at this commit; re-measure before quoting if more than ±2 off.
 
 ---
 
@@ -26,12 +26,14 @@ claude-skill-factory/
 │  └─ implement_20260503_152102.md                ← phased plan + post-build review
 └─ tools/claude-skill-factory/
    ├─ pyproject.toml                              ← package metadata, ruff/pytest config
+   ├─ MANIFEST.in                                 ← sdist contents (incl. symlinked LICENSE/docs/scripts)
+   ├─ LICENSE / README.md / CHANGELOG.md / AGENTS.md / docs / scripts ← symlinks → repo root
    ├─ skill_factory/
-   │  ├─ __init__.py             (3 lines)        ← __version__ = "0.1.0"
-   │  ├─ cli.py                  (1077 lines)     ← Typer app, 21 entries, settings builder, doctor
+   │  ├─ __init__.py             (20 lines)       ← re-exports new modules + __version__
+   │  ├─ cli.py                  (1589 lines)     ← Typer app, 24 entries, settings/uninstall/rotate/verify
    │  ├─ hook_handlers.py        (438 lines)      ← Claude Code stdin → redact → jsonl
    │  ├─ storage.py              (232 lines)      ← scope routing, atomic IO, fcntl
-   │  ├─ rules.py                (206 lines)      ← 5 keyword rules with full skill metadata
+   │  ├─ rules.py                (221 lines)      ← 5 built-in rules + user_rules merge
    │  ├─ similarity.py           (589 lines)      ← TF-IDF + char n-gram + cosine clustering
    │  ├─ analytics.py            (250 lines)      ← KPI aggregation
    │  ├─ quality.py              (232 lines)      ← 7-dim score + readiness + templates
@@ -39,9 +41,13 @@ claude-skill-factory/
    │  ├─ enrichment.py           (26 lines)       ← compile + enrich glue
    │  ├─ approvals.py            (108 lines)      ← state machine (H2 + L3 fixes)
    │  ├─ dashboard.py            (294 lines)      ← cards HTML + JSON
-   │  ├─ templating.py           (137 lines)      ← render_skill, ARCHETYPE_TOOLS, truncation
+   │  ├─ templating.py           (143 lines)      ← render_skill, ARCHETYPE_TOOLS, disable_auto_invocation
+   │  ├─ logging_setup.py        (26 lines)       ← stdlib logger config (v0.2.0)
+   │  ├─ user_rules.py           (124 lines)      ← user_rules.json loader (v0.2.0)
+   │  ├─ rotation.py             (121 lines)      ← jsonl size/age archival (v0.2.0)
+   │  ├─ verifier.py             (155 lines)      ← SKILL.md template-spec verifier (v0.2.0)
    │  └─ templates/SKILL.md.j2                    ← Jinja2 source for SKILL.md
-   └─ tests/                     (12 files / 2,138 lines / 124 cases)
+   └─ tests/                     (18 files / 2,784 lines / 165 cases)
       ├─ test_storage.py         (178 lines, 13 cases)
       ├─ test_hook_handlers.py   (226 lines, 15 cases)
       ├─ test_rules.py           ( 48 lines,  7 cases)
@@ -58,7 +64,7 @@ claude-skill-factory/
       └─ test_e2e.py             (274 lines,  5 cases — real pipeline, no monkeypatch)
 ```
 
-Total source: 3,812 LOC. Tests: 2,138 LOC. Combined: 5,950 LOC.
+Total source: 4,888 LOC. Tests: 2,784 LOC. Combined: 7,672 LOC.
 
 ### 1.1 Runtime data (gitignored)
 

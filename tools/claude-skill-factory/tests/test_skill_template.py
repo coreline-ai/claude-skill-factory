@@ -148,3 +148,19 @@ def test_missing_name_raises_undefined_error() -> None:
     bad.pop("name")
     with pytest.raises(jinja2.UndefinedError):
         templating.render_skill(bad)
+
+
+def test_disable_auto_invocation_default_false() -> None:
+    """Default render keeps disable-model-invocation: false."""
+    rendered = templating.render_skill(_enriched_candidate())
+    front = _frontmatter(rendered)
+    assert "disable-model-invocation: false" in front
+
+
+def test_disable_auto_invocation_true() -> None:
+    """``disable_auto_invocation=True`` flips the frontmatter flag."""
+    rendered = templating.render_skill(
+        _enriched_candidate(), disable_auto_invocation=True
+    )
+    front = _frontmatter(rendered)
+    assert "disable-model-invocation: true" in front

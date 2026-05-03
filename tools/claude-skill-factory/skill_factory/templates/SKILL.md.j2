@@ -6,7 +6,7 @@ when_to_use: |
   {{ line }}
 {% endfor %}
 allowed-tools: {{ allowed_tools }}
-disable-model-invocation: false
+disable-model-invocation: {{ disable_model_invocation | string | lower }}
 user-invocable: true
 {% if paths %}
 paths: "{{ paths }}"

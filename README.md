@@ -5,7 +5,7 @@
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Tests](https://img.shields.io/badge/tests-124%20passing-brightgreen.svg)](tools/claude-skill-factory/tests)
+[![Tests](https://img.shields.io/badge/tests-165%20passing-brightgreen.svg)](tools/claude-skill-factory/tests)
 
 ## What it does
 
@@ -21,7 +21,7 @@ PostToolUse      ───►  enrich + render ───►  doctor
 
 ## Status
 
-**v0.1.0 alpha** — all Golden Path commands implemented (`init`, `inbox`, `promote`, `dashboard`, `doctor`) plus 13 advanced commands. 124 tests passing including 5 end-to-end scenarios. Not yet on PyPI; install from source.
+**v0.2.0 distribution-ready** — all Golden Path commands plus 16 advanced commands (now including `uninstall`, `rotate`, `verify`). 165 tests passing including 5 end-to-end scenarios. Wheel + sdist build verified; not yet on PyPI.
 
 ## Quick Start
 
@@ -82,6 +82,21 @@ After step 5, restart Claude Code (or it picks up the skill in-session). Type `/
 **Approval & generation (6)** — fine-grained state changes:
 
 `approve <name>` · `ignore <name> --reason` · `unignore <name>` · `review` (batch interactive) · `enrich [<name>]` (re-compile skill_spec) · `create <name> --force` (skip approval gate; for power users).
+
+**Lifecycle (3)** — added in v0.2.0:
+
+| Command | Purpose |
+|---|---|
+| `uninstall` | Remove the factory's hooks from `.claude/settings.json` (preserves user-defined hooks; backs up). With `--keep-data` retains history; default cleans the data dirs after confirmation. |
+| `rotate` | Archive old `prompts.jsonl` / `turns.jsonl` / `tool_uses.jsonl` to `.bak.jsonl` files when size or age thresholds trip. `--dry-run` previews. |
+| `verify [name]` | Validate a generated `SKILL.md` against the template spec (frontmatter fields, body sections, 1,536-char cap). `--all` checks every installed skill. |
+
+**Global flags**:
+
+| Flag | Effect |
+|---|---|
+| `--verbose / -v` | DEBUG-level logging on stderr (good for debugging hook firing). |
+| `--no-auto-invoke` | (on `promote` / `create`) emit `disable-model-invocation: true` so the skill is manual-invocation-only. |
 
 **Hidden (3)** — Claude Code calls these via `.claude/settings.json`; you never run them by hand:
 
@@ -184,7 +199,10 @@ The script is also wired up as a pytest case (`tests/test_self_test_100_prompts.
 
 - **`doctor` says "hook command resolves on PATH" failed** → the venv where you ran `init` is not activated in the shell where Claude Code launches hooks. Re-run `init` from a shell whose PATH includes `claude-skill-factory`, or use `pipx install` for a global install.
 - **`inbox` shows zero candidates** → either no hook fired (run `doctor` to confirm `prompts.jsonl` is non-empty), or your prompts haven't repeated enough to clear the default `--min-frequency 2` threshold. Lower it: `inbox --min-frequency 1`.
-- **`promote` failed with "PermissionError: ignored"** → the candidate is currently ignored. Add `--force` if you really want to resurrect it, or run `unignore <name>` first.
+- **`promote` failed with "PermissionError: ignored"** → the candidate is currently ignored. Add `--force` if you really want to resurrect it, or run `unignore <name>` first. Exit code is `4` (`EXIT_PERMISSION`).
+- **`promote` exited with code 3 ("Skill 'x' already exists")** → there's already a `SKILL.md` at the target path. Pass `--overwrite` to replace, pick a different name, or `verify <name>` first to inspect.
+- **`prompts.jsonl` got huge** → `claude-skill-factory rotate` archives anything ≥ 50 MB or older than 30 days. `doctor` now warns at 100 MB / 30 days.
+- **Need to remove the factory cleanly** → `claude-skill-factory uninstall --repo . --project` removes our hooks from `settings.json`; add `--keep-data` to preserve the prompt history.
 - **Settings.json got overwritten?** It didn't — look for `<repo>/.claude/settings.json.bak.<timestamp>`. `init` always backs up before merging.
 - **Korean prompts aren't matching rules?** They should — `rules.py` keywords cover both languages. If a specific phrase keeps going unclassified, file it under `inbox`'s "missed pattern" feedback so we can tune `_FILE_RE` / `_BRANCH_RE` for it.
 

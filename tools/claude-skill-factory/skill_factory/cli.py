@@ -3,8 +3,8 @@
 Single Typer app exposing the full surface area: golden-path commands (init,
 inbox, promote, dashboard, doctor), analysis commands (scan, report, preview,
 analytics), approval commands (approve, ignore, unignore, review), generation
-commands (enrich, create), and three hidden hook bridges that Claude Code
-invokes via stdin.
+commands (enrich, create), lifecycle commands (uninstall, rotate, verify),
+and three hidden hook bridges that Claude Code invokes via stdin.
 
 Design rules baked in here:
 
@@ -19,11 +19,19 @@ Design rules baked in here:
 * **H1** — ``init`` prompts before overwriting an existing settings.json
   unless ``--yes`` is set.
 * **H2** — promoting an ignored candidate without ``--force`` raises
-  ``PermissionError`` (surfaced as exit ≠ 0).
+  ``PermissionError`` (surfaced as exit ``EXIT_PERMISSION``).
 * **H3** — ``inbox`` auto-skips its prompt loop when stdout is not a TTY.
 * **H4** — every user-facing command accepts ``--repo`` and ``--project``.
 * **M8** — ``doctor`` includes a "liveness" check that passes if either the
   prompts log has at least one line OR the binary is on PATH.
+
+Standardized exit codes (v1.0):
+
+* ``EXIT_OK`` (0) — success.
+* ``EXIT_HEALTH`` (1) — doctor failures, integrity violations.
+* ``EXIT_USAGE`` (2) — bad args, candidate-not-found, missing --force on create.
+* ``EXIT_CONFLICT`` (3) — name conflict, would-overwrite without --overwrite.
+* ``EXIT_PERMISSION`` (4) — ignored-state guard rails.
 """
 
 from __future__ import annotations
@@ -52,6 +60,8 @@ from .approvals import (
 from .dashboard import build_dashboard_data, render_dashboard_html
 from .enrichment import enrich_candidate, enrich_candidates
 from .hook_handlers import handle_post_tool_use, handle_stop, handle_user_prompt
+from .logging_setup import get_logger, setup_logger
+from .rotation import RotationResult, rotate_jsonl
 from .rules import classify_prompt, get_rule
 from .similarity import build_similarity_candidates
 from .storage import (
@@ -63,6 +73,15 @@ from .storage import (
     write_json,
 )
 from .templating import render_skill
+from .verifier import VerifyResult, verify_skill_md
+
+# ---------- exit-code constants --------------------------------------------
+
+EXIT_OK = 0
+EXIT_HEALTH = 1
+EXIT_USAGE = 2
+EXIT_CONFLICT = 3
+EXIT_PERMISSION = 4
 
 app = typer.Typer(
     name="claude-skill-factory",
@@ -112,8 +131,15 @@ def main(
         is_eager=True,
         help="Show version and exit.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable DEBUG-level logging on stderr.",
+    ),
 ) -> None:
     """Claude Skill Factory."""
+    setup_logger(verbose=verbose)
 
 
 # ---------- settings builder (Phase 5) --------------------------------------
@@ -477,7 +503,7 @@ def init(
         )
     ):
         console.print("[yellow]Aborted.[/yellow] No changes written.")
-        raise typer.Exit(1)
+        raise typer.Exit(code=EXIT_HEALTH)
 
     changes = ensure_product_files(repo, project=project, dry_run=dry_run, allow_cwd_fallback=True)
     scope = _scope(project)
@@ -570,7 +596,9 @@ def _do_promote(
     overwrite: bool,
     evidence: bool,
     force: bool,
+    no_auto_invoke: bool = False,
 ) -> Path:
+    logger = get_logger()
     paths = _resolve_paths(repo, project=project)
     candidates = _load_candidates(paths)
     candidate = _find_candidate(candidates, name)
@@ -582,16 +610,34 @@ def _do_promote(
     skill_dir = paths.skills_dir / name
     skill_path = skill_dir / "SKILL.md"
     if skill_path.exists() and not overwrite:
-        raise typer.BadParameter(f"Skill already exists: {skill_path}. Use --overwrite to replace.")
+        # EXIT_CONFLICT: data-loss guard rail (#2 Safety patch).
+        console.print(
+            f"[red]Skill '{name}' already exists at {skill_path}.[/red] "
+            "Pass --overwrite to replace, or pick a different name."
+        )
+        raise typer.Exit(code=EXIT_CONFLICT)
     if not yes:
-        console.print(render_skill(enriched, include_evidence=evidence, enriched=True))
+        console.print(
+            render_skill(
+                enriched,
+                include_evidence=evidence,
+                enriched=True,
+                disable_auto_invocation=no_auto_invoke,
+            )
+        )
         if not typer.confirm(f"Promote {name} into a Claude Code Skill?", default=True):
-            raise typer.Exit(1)
+            raise typer.Exit(code=EXIT_HEALTH)
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(
-        render_skill(enriched, include_evidence=evidence, enriched=True),
+        render_skill(
+            enriched,
+            include_evidence=evidence,
+            enriched=True,
+            disable_auto_invocation=no_auto_invoke,
+        ),
         encoding="utf-8",
     )
+    logger.info("promoted candidate '%s' to %s", name, skill_path)
     set_candidate_status(
         candidates,
         name,
@@ -614,6 +660,11 @@ def promote(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite an existing skill."),
     evidence: bool = typer.Option(False, "--evidence/--no-evidence", help="Include example prompts."),
     force: bool = typer.Option(False, "--force", help="Allow promoting ignored candidates."),
+    no_auto_invoke: bool = typer.Option(
+        False,
+        "--no-auto-invoke",
+        help="Set disable-model-invocation: true (skill won't be auto-activated by Claude).",
+    ),
 ) -> None:
     """Promote a candidate to an installed Claude Code Skill."""
     project = project or repo is not None
@@ -626,10 +677,11 @@ def promote(
             overwrite=overwrite,
             evidence=evidence,
             force=force,
+            no_auto_invoke=no_auto_invoke,
         )
     except PermissionError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2) from exc
+        console.print(f"[red]{exc}[/red] Use --force to override.")
+        raise typer.Exit(code=EXIT_PERMISSION) from exc
     console.print(f"[green]Skill installed:[/green] {skill_path}")
 
 
@@ -651,6 +703,124 @@ def dashboard(
     console.print(f"Data: {paths.dashboard_json}")
 
 
+# ---------- doctor checks --------------------------------------------------
+
+
+# Hard-coded per-check troubleshooting hints surfaced when ok=false or warn=true.
+# Keys must match the ``name`` field of the check dict produced below.
+_DOCTOR_HINTS: dict[str, str] = {
+    "settings.json exists": "Run `claude-skill-factory init --repo . --project --yes`.",
+    "UserPromptSubmit hook registered": (
+        "settings.json may have been edited; re-run `claude-skill-factory init` "
+        "or manually re-add the hook."
+    ),
+    "Stop hook registered": (
+        "settings.json may have been edited; re-run `claude-skill-factory init` "
+        "or manually re-add the hook."
+    ),
+    "PostToolUse hook registered": (
+        "settings.json may have been edited; re-run `claude-skill-factory init` "
+        "or manually re-add the hook."
+    ),
+    "history dir exists": "Run `claude-skill-factory init` to create the history dir.",
+    "prompts.jsonl exists": "Run `claude-skill-factory init` to create prompts.jsonl.",
+    "turns.jsonl exists": "Run `claude-skill-factory init` to create turns.jsonl.",
+    "tool_uses.jsonl exists": "Run `claude-skill-factory init` to create tool_uses.jsonl.",
+    "suggestions dir exists": "Run `claude-skill-factory init`.",
+    "candidates.json exists": "Run `claude-skill-factory scan` to generate candidates.json.",
+    "ignored.json exists": "Run `claude-skill-factory init`.",
+    "skills dir exists": "Run `claude-skill-factory init`.",
+    "liveness (prompts logged or binary on PATH)": (
+        "Activate the venv or pipx-install the package so the binary resolves, "
+        "or generate at least one prompt by running Claude Code."
+    ),
+    "binary resolves on PATH (C2)": (
+        "Run `init` from a shell where `claude-skill-factory` is on PATH "
+        "(activate the venv or use `pipx install`)."
+    ),
+    "hook command resolves to absolute path": (
+        "PATH lookup failed at init time; re-run `init` after activating the venv."
+    ),
+    "scope": "Internal scope mismatch; re-run `init`.",
+    "no skill name conflicts": (
+        "Run `claude-skill-factory verify --all` to inspect, "
+        "or `--overwrite` on the next promote."
+    ),
+    "prompts.jsonl freshness": "Run `claude-skill-factory rotate` to archive old entries.",
+}
+
+_FRESHNESS_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
+_FRESHNESS_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+
+def _check_skill_name_conflicts(paths: Paths) -> tuple[bool, str]:
+    """Verify candidate names don't accidentally collide with installed skills.
+
+    * ``status=created`` candidates SHOULD have a SKILL.md at ``<skills_dir>/<name>/``.
+    * ``status=pending_review|approved|ignored`` candidates SHOULD NOT.
+    """
+    candidates = read_json(paths.candidates_file, default=[]) or []
+    if not isinstance(candidates, list):
+        return True, "candidates.json malformed (skipped conflict check)"
+    bad: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        name = candidate.get("name")
+        status = candidate.get("status")
+        if not isinstance(name, str) or not name:
+            continue
+        skill_path = paths.skills_dir / name / "SKILL.md"
+        if status == "created":
+            if not skill_path.exists():
+                bad.append(f"{name} (status=created but SKILL.md missing)")
+        elif skill_path.exists():
+            bad.append(f"{name} (pending but SKILL.md already at {skill_path})")
+    if bad:
+        return False, "; ".join(bad)
+    return True, f"checked {len(candidates)} candidates"
+
+
+def _check_prompts_freshness(paths: Paths) -> tuple[bool, str]:
+    """Warn-style check: prompts.jsonl < 100 MB AND mtime within 30 days.
+
+    Returns (ok, detail). When ok is False the doctor surfaces a *warn* row
+    (yellow) — it does not gate the overall doctor result.
+    """
+    path = paths.prompts_file
+    if not path.exists():
+        return True, "prompts.jsonl absent (skipped)"
+    try:
+        stat = path.stat()
+    except OSError as exc:  # pragma: no cover - filesystem oddity
+        return True, f"stat failed: {exc}"
+    size = stat.st_size
+    age_seconds = max(0.0, datetime.now(UTC).timestamp() - stat.st_mtime)
+    age_days = age_seconds / 86400
+    size_mb = size / (1024 * 1024)
+    detail = f"size={size_mb:.1f}MB, age={age_days:.1f}d"
+    if size >= _FRESHNESS_MAX_BYTES:
+        return False, f"{detail} (>=100MB)"
+    if age_seconds >= _FRESHNESS_MAX_AGE_SECONDS:
+        return False, f"{detail} (>=30d)"
+    return True, detail
+
+
+def _attach_hints(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a ``troubleshoot`` field to every failed/warn check."""
+    out: list[dict[str, Any]] = []
+    for check in checks:
+        ok = bool(check.get("ok", False))
+        warn = bool(check.get("warn", False))
+        new_check = dict(check)
+        if not ok or warn:
+            hint = _DOCTOR_HINTS.get(str(check.get("name", "")), "")
+            if hint:
+                new_check["troubleshoot"] = hint
+        out.append(new_check)
+    return out
+
+
 def _doctor_checks(paths: Paths) -> list[dict[str, Any]]:
     settings_data = read_json(paths.settings_file, default={}) or {}
     hook_events = settings_data.get("hooks", {}) if isinstance(settings_data, dict) else {}
@@ -661,6 +831,9 @@ def _doctor_checks(paths: Paths) -> list[dict[str, Any]]:
     binary_on_path = bool(shutil.which("claude-skill-factory"))
 
     expected_command = hook_command("hook-user-prompt", project=(paths.scope == "project"))
+
+    conflicts_ok, conflicts_detail = _check_skill_name_conflicts(paths)
+    freshness_ok, freshness_detail = _check_prompts_freshness(paths)
 
     checks: list[dict[str, Any]] = [
         {"name": "settings.json exists", "ok": paths.settings_file.exists(), "detail": str(paths.settings_file)},
@@ -703,8 +876,22 @@ def _doctor_checks(paths: Paths) -> list[dict[str, Any]]:
             "detail": expected_command,
         },
         {"name": "scope", "ok": paths.scope in {"user", "project"}, "detail": paths.scope},
+        # New v1.0 checks (#2 / #5 Safety patches).
+        {
+            "name": "no skill name conflicts",
+            "ok": conflicts_ok,
+            "detail": conflicts_detail,
+        },
+        {
+            "name": "prompts.jsonl freshness",
+            # warn-style: ok stays True so doctor doesn't gate; the warn flag
+            # is what the rendering layer flips to yellow.
+            "ok": True,
+            "warn": not freshness_ok,
+            "detail": freshness_detail,
+        },
     ]
-    return checks
+    return _attach_hints(checks)
 
 
 @app.command()
@@ -717,21 +904,42 @@ def doctor(
     project = project or repo is not None
     paths = _resolve_paths(repo, project=project, allow_cwd_fallback=True)
     checks = _doctor_checks(paths)
-    all_ok = all(check["ok"] for check in checks)
+    # Failure = any check whose ok is False (warn-only checks keep ok=True).
+    failures = [c for c in checks if not c.get("ok", False)]
+    warnings = [c for c in checks if c.get("ok", False) and c.get("warn", False)]
+    all_ok = not failures
     if json_output:
-        typer.echo(json.dumps({"ok": all_ok, "scope": paths.scope, "checks": checks}, ensure_ascii=False, indent=2))
+        payload = {
+            "ok": all_ok,
+            "scope": paths.scope,
+            "checks": checks,
+            "warnings": warnings,
+        }
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         if not all_ok:
-            raise typer.Exit(1)
+            raise typer.Exit(code=EXIT_HEALTH)
         return
     table = Table(title="Claude Skill Factory Doctor")
     table.add_column("Check")
     table.add_column("OK")
     table.add_column("Detail")
     for check in checks:
-        table.add_row(str(check["name"]), "ok" if check["ok"] else "fail", str(check["detail"]))
+        ok = bool(check.get("ok", False))
+        warn = bool(check.get("warn", False))
+        if not ok:
+            status = "[red]fail[/red]"
+        elif warn:
+            status = "[yellow]warn[/yellow]"
+        else:
+            status = "[green]ok[/green]"
+        table.add_row(str(check["name"]), status, str(check["detail"]))
+        hint = check.get("troubleshoot")
+        if hint and (not ok or warn):
+            colour = "red" if not ok else "yellow"
+            table.add_row("", "", f"[{colour}]Hint:[/{colour}] {hint}")
     console.print(table)
     if not all_ok:
-        raise typer.Exit(1)
+        raise typer.Exit(code=EXIT_HEALTH)
 
 
 # ---------- Phase 7: Analysis / Approval / Generation ----------------------
@@ -837,8 +1045,8 @@ def approve(
     try:
         set_candidate_status(candidates, name, "approved", force=force, approved_at=utc_now())
     except PermissionError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2) from exc
+        console.print(f"[red]{exc}[/red] Use --force to override.")
+        raise typer.Exit(code=EXIT_PERMISSION) from exc
     if force:
         ignored = unignore_candidate(
             read_json(paths.ignored_file, default={"ignored": {}}) or {"ignored": {}},
@@ -971,6 +1179,11 @@ def create(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite an existing skill."),
     evidence: bool = typer.Option(False, "--evidence/--no-evidence", help="Include example prompts."),
     force: bool = typer.Option(False, "--force", help="Required acknowledgement to write SKILL.md."),
+    no_auto_invoke: bool = typer.Option(
+        False,
+        "--no-auto-invoke",
+        help="Set disable-model-invocation: true (skill won't be auto-activated by Claude).",
+    ),
 ) -> None:
     """Write SKILL.md without status promotion. Requires --force as a guardrail."""
     project = project or repo is not None
@@ -979,23 +1192,322 @@ def create(
             "[yellow]create writes a SKILL.md without changing candidate status. "
             "Re-run with --force to confirm.[/yellow]"
         )
-        raise typer.Exit(2)
+        raise typer.Exit(code=EXIT_USAGE)
     paths = _resolve_paths(repo, project=project)
     candidates = _load_candidates(paths)
     candidate = _find_candidate(candidates, name)
-    if candidate.get("status") == "ignored" and not force:
-        raise typer.BadParameter(f"Candidate is ignored. Use --force to create anyway: {name}")
     enriched = enrich_candidate(candidate)
     skill_dir = paths.skills_dir / name
     skill_path = skill_dir / "SKILL.md"
     if skill_path.exists() and not overwrite:
-        raise typer.BadParameter(f"Skill already exists: {skill_path}")
+        # EXIT_CONFLICT: name collision (#2 Safety patch).
+        console.print(
+            f"[red]Skill '{name}' already exists at {skill_path}.[/red] "
+            "Pass --overwrite to replace, or pick a different name."
+        )
+        raise typer.Exit(code=EXIT_CONFLICT)
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(
-        render_skill(enriched, include_evidence=evidence, enriched=True),
+        render_skill(
+            enriched,
+            include_evidence=evidence,
+            enriched=True,
+            disable_auto_invocation=no_auto_invoke,
+        ),
         encoding="utf-8",
     )
     console.print(f"[green]Skill created:[/green] {skill_path}")
+
+
+# ---------- v1.0 lifecycle commands ----------------------------------------
+
+
+# Slugs that identify our hook commands inside settings.json. Used by
+# uninstall to recognise our hooks regardless of which executable absolute
+# path was written at init time and whether ``--project`` was appended.
+_HOOK_SLUGS: tuple[str, ...] = (
+    "hook-user-prompt",
+    "hook-stop",
+    "hook-post-tool-use",
+)
+
+
+def _is_our_hook_command(command: str) -> bool:
+    """Return True if *command* looks like a Skill Factory hook entry."""
+    if not isinstance(command, str):
+        return False
+    tokens = command.split()
+    return any(slug in tokens for slug in _HOOK_SLUGS)
+
+
+def _strip_our_hooks_from_event(entries: list[Any]) -> tuple[list[Any], int]:
+    """Remove our hook commands from one event's matcher entries.
+
+    Returns ``(new_entries, removed_count)``. Preserves user-defined matchers
+    and individual hook entries that don't reference our slugs.
+    """
+    new_entries: list[Any] = []
+    removed = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            new_entries.append(entry)
+            continue
+        nested = entry.get("hooks")
+        if isinstance(nested, list):
+            kept_hooks = []
+            for hook in nested:
+                if isinstance(hook, dict) and _is_our_hook_command(hook.get("command", "")):
+                    removed += 1
+                    continue
+                kept_hooks.append(hook)
+            if not kept_hooks:
+                # Whole matcher had only our hooks: drop it.
+                continue
+            new_entry = dict(entry)
+            new_entry["hooks"] = kept_hooks
+            new_entries.append(new_entry)
+            continue
+        # Flat shape: ``{"command": "...", ...}``.
+        if _is_our_hook_command(entry.get("command", "")):
+            removed += 1
+            continue
+        new_entries.append(entry)
+    return new_entries, removed
+
+
+def _strip_our_hooks(settings: dict[str, Any]) -> tuple[dict[str, Any], int, int]:
+    """Return ``(new_settings, removed_count, preserved_count)``.
+
+    ``preserved_count`` counts hook commands kept (user-defined hooks).
+    """
+    if not isinstance(settings, dict):
+        return {}, 0, 0
+    new_settings = json.loads(json.dumps(settings))
+    hooks = new_settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return new_settings, 0, 0
+    total_removed = 0
+    preserved = 0
+    new_hooks: dict[str, Any] = {}
+    for event_name, entries in hooks.items():
+        if not isinstance(entries, list):
+            new_hooks[event_name] = entries
+            continue
+        stripped, removed = _strip_our_hooks_from_event(entries)
+        total_removed += removed
+        # Count surviving hook commands.
+        for entry in stripped:
+            if isinstance(entry, dict):
+                nested = entry.get("hooks")
+                if isinstance(nested, list):
+                    preserved += sum(1 for h in nested if isinstance(h, dict) and h.get("command"))
+                elif entry.get("command"):
+                    preserved += 1
+        if stripped:
+            new_hooks[event_name] = stripped
+        # else: drop the empty event entirely.
+    new_settings["hooks"] = new_hooks
+    return new_settings, total_removed, preserved
+
+
+@app.command()
+def uninstall(
+    repo: Path | None = typer.Option(None, "--repo", "-r", help="Repository root for project scope."),
+    project: bool = typer.Option(False, "--project", help="Uninstall from project-local storage."),
+    keep_data: bool = typer.Option(
+        False,
+        "--keep-data",
+        help="Keep prompt-history / suggestions / skills directories. Only removes hooks.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when deleting data."),
+) -> None:
+    """Remove Skill Factory hooks from settings.json (and optionally delete local data)."""
+    project = project or repo is not None
+    logger = get_logger()
+    paths = _resolve_paths(repo, project=project, allow_cwd_fallback=True)
+
+    if not paths.claude_config_dir.exists():
+        console.print("Nothing to uninstall.")
+        return
+
+    settings_file = paths.settings_file
+    removed_count = 0
+    preserved_count = 0
+    if settings_file.exists():
+        existing_raw = settings_file.read_text(encoding="utf-8").strip()
+        if existing_raw:
+            try:
+                existing = json.loads(existing_raw)
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[red]settings.json at {settings_file} is malformed:[/red] {exc}"
+                )
+                raise typer.Exit(code=EXIT_HEALTH) from exc
+        else:
+            existing = {}
+        new_settings, removed_count, preserved_count = _strip_our_hooks(existing)
+        if removed_count == 0:
+            console.print("Already uninstalled.")
+            return
+        backup_file(settings_file)
+        write_json(settings_file, new_settings)
+        logger.info("removed %d hook entries from %s", removed_count, settings_file)
+    # else: settings.json missing — nothing to remove there. Continue to data step.
+
+    deleted_dirs = 0
+    if not keep_data:
+        targets = [paths.history_dir, paths.suggestions_dir, paths.skills_dir]
+        existing_targets = [t for t in targets if t.exists()]
+        proceed = yes
+        if not yes and existing_targets:
+            if not sys.stdout.isatty():
+                # Non-TTY: auto-skip (treat absence of confirmation as "skip data").
+                proceed = False
+            else:
+                proceed = typer.confirm(
+                    f"Delete data directories under {paths.claude_config_dir}? "
+                    f"({', '.join(t.name for t in existing_targets)})",
+                    default=False,
+                )
+        if proceed:
+            for target in existing_targets:
+                shutil.rmtree(target, ignore_errors=True)
+                deleted_dirs += 1
+                logger.info("removed directory %s", target)
+
+    console.print(
+        f"[green]Removed {removed_count} hook entries; "
+        f"deleted {deleted_dirs} directories; "
+        f"preserved {preserved_count} user-defined hooks.[/green]"
+    )
+
+
+@app.command()
+def rotate(
+    repo: Path | None = typer.Option(None, "--repo", "-r", help="Repository root for project scope."),
+    project: bool = typer.Option(False, "--project", help="Use project-local storage."),
+    max_size_mb: int = typer.Option(50, "--max-size-mb", min=1, help="Rotate when file >= this size."),
+    max_age_days: int = typer.Option(30, "--max-age-days", min=1, help="Rotate when file mtime older than this."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would happen without touching disk."),
+) -> None:
+    """Rotate prompts/turns/tool_uses jsonl when size or age thresholds are met."""
+    project = project or repo is not None
+    paths = _resolve_paths(repo, project=project)
+    targets = [paths.prompts_file, paths.turns_file, paths.tool_uses_file]
+
+    table = Table(title="Claude Skill Factory Rotate" + (" (dry run)" if dry_run else ""))
+    table.add_column("File")
+    table.add_column("Status")
+    table.add_column("Reason")
+    table.add_column("Size")
+    table.add_column("Backup")
+
+    rotated_count = 0
+    for path in targets:
+        size = path.stat().st_size if path.exists() else 0
+        result: RotationResult = rotate_jsonl(
+            path,
+            max_size_mb=max_size_mb,
+            max_age_days=max_age_days,
+            dry_run=dry_run,
+        )
+        if result.rotated_to is None:
+            status = "unchanged"
+        elif dry_run:
+            status = "would rotate"
+        else:
+            status = "rotated"
+            rotated_count += 1
+        table.add_row(
+            str(path),
+            status,
+            result.reason or "—",
+            f"{size / (1024 * 1024):.2f}MB" if path.exists() else "—",
+            str(result.rotated_to) if result.rotated_to else "—",
+        )
+    console.print(table)
+    if dry_run:
+        console.print("[cyan]Dry run.[/cyan] No changes written.")
+    else:
+        console.print(f"Rotated {rotated_count} file(s).")
+
+
+def _verify_one(name: str, skills_dir: Path) -> tuple[str, VerifyResult | None]:
+    """Run verify_skill_md on a single skill directory.
+
+    Returns (name, result_or_None). ``None`` means the SKILL.md was missing.
+    """
+    skill_md = skills_dir / name / "SKILL.md"
+    if not skill_md.exists():
+        return name, None
+    return name, verify_skill_md(skill_md)
+
+
+@app.command()
+def verify(
+    name: str | None = typer.Argument(None, help="Skill name. Omit with --all to verify every skill."),
+    repo: Path | None = typer.Option(None, "--repo", "-r", help="Repository root for project scope."),
+    project: bool = typer.Option(False, "--project", help="Use project-local storage."),
+    all_skills: bool = typer.Option(False, "--all", help="Verify every installed skill."),
+) -> None:
+    """Verify SKILL.md against the template spec (frontmatter + sections)."""
+    project = project or repo is not None
+    paths = _resolve_paths(repo, project=project)
+    skills_dir = paths.skills_dir
+
+    targets: list[str]
+    if all_skills:
+        targets = _list_skill_names(skills_dir)
+        # Also include directories without SKILL.md so the user sees them.
+        if skills_dir.exists():
+            for entry in sorted(skills_dir.iterdir()):
+                if entry.is_dir() and entry.name not in targets:
+                    targets.append(entry.name)
+    else:
+        if not name:
+            console.print("[red]Provide a skill NAME or pass --all.[/red]")
+            raise typer.Exit(code=EXIT_USAGE)
+        targets = [name]
+
+    table = Table(title="Claude Skill Factory Verify")
+    table.add_column("Name")
+    table.add_column("OK")
+    table.add_column("Errors")
+    table.add_column("Warnings")
+
+    rows: list[tuple[str, VerifyResult | None]] = []
+    any_error = False
+    for target in targets:
+        skill_md = skills_dir / target / "SKILL.md"
+        if not skill_md.exists():
+            table.add_row(target, "[red]missing[/red]", "1", "0")
+            rows.append((target, None))
+            any_error = True
+            continue
+        result = verify_skill_md(skill_md)
+        ok_label = "[green]ok[/green]" if result.ok else "[red]fail[/red]"
+        table.add_row(target, ok_label, str(len(result.errors)), str(len(result.warnings)))
+        if not result.ok:
+            any_error = True
+        rows.append((target, result))
+
+    console.print(table)
+
+    # Detail block: print errors / warnings under each row.
+    for target, result in rows:
+        if result is None:
+            console.print(f"  [red]{target}: SKILL.md not found at {skills_dir / target / 'SKILL.md'}[/red]")
+            continue
+        for err in result.errors:
+            console.print(f"  [red]{target}: {err}[/red]")
+        for warn in result.warnings:
+            console.print(f"  [yellow]{target}: {warn}[/yellow]")
+
+    if not targets:
+        console.print("(no skills found)")
+
+    if any_error:
+        raise typer.Exit(code=EXIT_HEALTH)
 
 
 # ---------- hidden hook bridges (C1) ---------------------------------------

@@ -51,7 +51,7 @@ user-invocable: true
 | `description` | `candidate.title` | One-line trigger, no newlines. |
 | `when_to_use` | `candidate.when_to_use` joined by `\n` | Block scalar (`|`). Truncated with trailing `…` so `len(description) + len(when_to_use) ≤ 1536`. |
 | `allowed-tools` | `ARCHETYPE_TOOLS[skill_spec.task_archetype]` | Space-separated. See §3. |
-| `disable-model-invocation` | always `false` | Reserved for advanced users; v0.1 always keeps auto-invocation on. |
+| `disable-model-invocation` | `false` by default; `true` when `promote` / `create` is run with `--no-auto-invoke` (v0.2.0+) | Skills emitted with `true` will not be auto-invoked by the model — only manual `/<name>` invocation works. |
 | `user-invocable` | always `true` | Lets the user type `/<name>` in Claude Code. |
 
 ### 2.2 Optional fields

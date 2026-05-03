@@ -87,11 +87,16 @@ def render_skill(
     *,
     enriched: bool = True,
     include_evidence: bool = True,
+    disable_auto_invocation: bool = False,
 ) -> str:
     """Render SKILL.md content for a candidate.
 
     Raises ``jinja2.UndefinedError`` if the candidate is missing a field the
     template requires (e.g. ``name``, ``title``, ``goal``).
+
+    When ``disable_auto_invocation`` is True the rendered frontmatter sets
+    ``disable-model-invocation: true`` so Claude Code will not pick the skill
+    up automatically (user invocation only).
     """
     if not isinstance(candidate, dict):
         raise TypeError("render_skill expects a candidate dict")
@@ -134,4 +139,5 @@ def render_skill(
         paths=paths,
         argument_hint=argument_hint,
         evidence_examples=evidence_examples,
+        disable_model_invocation=bool(disable_auto_invocation),
     )

@@ -187,11 +187,26 @@ RULES: list[SkillRule] = [
 ]
 
 
+def get_all_rules() -> list[SkillRule]:
+    """Return built-in rules + user rules loaded from disk.
+
+    Built-ins come first; user rules are appended after. ``classify_prompt``
+    iterates this combined list and short-circuits on the first matching
+    keyword per rule, so a user-defined rule sharing the *name* of a built-in
+    does **not** shadow it — the built-in still wins for ``get_rule(name)``
+    lookups. To override behaviour, give the user rule a distinct ``name``.
+    """
+    # Local import keeps the import graph acyclic at module load time.
+    from .user_rules import load_user_rules
+
+    return list(RULES) + load_user_rules()
+
+
 def classify_prompt(text: str) -> list[str]:
     """Return rule names whose keywords appear in *text* (case-insensitive)."""
     lowered = (text or "").lower()
     matched: list[str] = []
-    for rule in RULES:
+    for rule in get_all_rules():
         for keyword in rule.keywords:
             if keyword.lower() in lowered:
                 matched.append(rule.name)
@@ -200,7 +215,7 @@ def classify_prompt(text: str) -> list[str]:
 
 
 def get_rule(name: str) -> SkillRule | None:
-    for rule in RULES:
+    for rule in get_all_rules():
         if rule.name == name:
             return rule
     return None
