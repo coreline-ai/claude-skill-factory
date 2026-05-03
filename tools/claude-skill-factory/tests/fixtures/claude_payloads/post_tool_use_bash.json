@@ -1,0 +1,16 @@
+{
+  "session_id": "sess-abc123",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/tmp/example-project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pytest -v tests/test_auth.py",
+    "description": "Run failing test"
+  },
+  "tool_response": {
+    "stdout": "1 passed in 0.01s",
+    "exit_code": 0
+  }
+}

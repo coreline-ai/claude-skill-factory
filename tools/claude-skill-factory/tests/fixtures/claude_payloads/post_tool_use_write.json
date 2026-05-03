@@ -1,0 +1,15 @@
+{
+  "session_id": "sess-abc123",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/tmp/example-project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/tmp/example-project/README.md",
+    "content": "# Example\n"
+  },
+  "tool_response": {
+    "success": true
+  }
+}

@@ -1,0 +1,24 @@
+# sdist contents.
+#
+# The wheel takes its data from [tool.setuptools.package-data] in
+# pyproject.toml; this file controls only the source distribution.
+#
+# Note: setuptools forbids paths outside the project root, so the top-level
+# LICENSE / README / CHANGELOG / docs / scripts are *not* shipped in the
+# sdist for v0.1.0-alpha. Source-tree consumers should clone the git repo
+# instead. PyPI publication (deferred to v0.1.x) will revisit this with
+# symlinks or a flatter layout.
+
+include pyproject.toml
+recursive-include skill_factory/templates *.j2
+recursive-include tests *.py *.json
+graft tests/fixtures
+
+# Always exclude build/cache artifacts
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
+global-exclude *.egg-info
+prune **/.venv
+prune **/.pytest_cache
+prune **/.ruff_cache

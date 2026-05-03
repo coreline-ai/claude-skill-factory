@@ -1,0 +1,142 @@
+---
+name: {{ candidate.name }}
+description: {{ description_text }}
+when_to_use: |
+{% for line in when_to_use_lines %}
+  {{ line }}
+{% endfor %}
+allowed-tools: {{ allowed_tools }}
+disable-model-invocation: false
+user-invocable: true
+{% if paths %}
+paths: "{{ paths }}"
+{% endif %}
+{% if argument_hint %}
+argument-hint: "{{ argument_hint }}"
+{% endif %}
+---
+
+# {{ candidate.title }}
+
+## When to use
+
+{% for item in candidate.when_to_use %}
+- {{ item }}
+{% endfor %}
+
+## When not to use
+
+{% for item in candidate.when_not_to_use %}
+- {{ item }}
+{% endfor %}
+
+## Goal
+
+{{ candidate.goal }}
+
+## Workflow
+
+{% for item in candidate.workflow %}
+{{ loop.index }}. {{ item }}
+{% endfor %}
+
+## Verification
+
+{% for item in candidate.verification %}
+- {{ item }}
+{% endfor %}
+
+## Do not
+
+{% for item in candidate.anti_patterns %}
+- {{ item }}
+{% endfor %}
+
+## Output format
+
+- What changed
+- Files touched
+- Commands run
+- Validation result
+- Risks or follow-ups
+{% if enriched and skill_spec %}
+
+## Prompt quality guide
+
+This guide helps Claude Code produce a high-quality response when this skill is invoked.
+
+### Task contract
+
+- Archetype: `{{ skill_spec.task_archetype }}`
+- Intent invariant: {{ skill_spec.intent_invariant }}
+
+### Variable slots
+
+| name | required | placeholder | description |
+| --- | --- | --- | --- |
+{% for slot in skill_spec.variable_slots %}
+| `{{ slot.name }}` | {{ "yes" if slot.required else "no" }} | {{ slot.default_placeholder }} | {{ slot.description }} |
+{% endfor %}
+
+## Better prompt templates
+
+### Minimal
+
+```text
+{{ skill_spec.better_prompt_templates.minimal }}
+```
+
+### High-signal
+
+```text
+{{ skill_spec.better_prompt_templates.high_signal }}
+```
+
+### Clarifying
+
+```text
+{{ skill_spec.better_prompt_templates.clarifying }}
+```
+
+## Ask when unclear
+
+{% for item in skill_spec.clarifying_questions %}
+- {{ item }}
+{% endfor %}
+
+## Quality checklist
+
+{% for item in skill_spec.quality_checklist %}
+- {{ item }}
+{% endfor %}
+
+## Generalization notes
+
+{% for item in skill_spec.generalization_notes %}
+- {{ item }}
+{% endfor %}
+
+## Prompt quality score
+
+- Overall: {{ skill_spec.prompt_quality.score }}
+
+| dimension | score |
+| --- | --- |
+{% for name, value in skill_spec.prompt_quality.dimensions.items() %}
+| {{ name }} | {{ value }} |
+{% endfor %}
+
+### Diagnostics
+
+{% for item in skill_spec.prompt_quality.diagnostics %}
+- {{ item }}
+{% endfor %}
+{% endif %}
+{% if include_evidence and evidence_examples %}
+
+## Evidence
+
+{% for item in evidence_examples %}
+- {{ item }}
+{% endfor %}
+{% endif %}

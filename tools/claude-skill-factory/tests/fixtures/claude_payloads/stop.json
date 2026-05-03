@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-abc123",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/tmp/example-project",
+  "permission_mode": "default",
+  "hook_event_name": "Stop"
+}

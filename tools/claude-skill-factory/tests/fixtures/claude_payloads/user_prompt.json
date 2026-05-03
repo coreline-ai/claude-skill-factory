@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-abc123",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/tmp/example-project",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "테스트가 실패하고 있어요. pytest 결과를 봐주고 src/auth.py를 고쳐주세요."
+}

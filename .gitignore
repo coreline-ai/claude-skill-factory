@@ -1,0 +1,45 @@
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+wheels/
+.eggs/
+
+# Virtualenvs and lockfiles
+.venv/
+venv/
+env/
+uv.lock
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Project policy
+# - User-scope artefacts (~/.claude/skill-factory, etc.) live outside the repo and are
+#   never committed.
+# - Project-scope artefacts (<repo>/.claude/prompt-history, skill-suggestions) are
+#   runtime data and must not be committed.
+# - <repo>/.claude/skills/ may receive generated SKILL.md files at runtime; do NOT
+#   commit them — only ``.gitkeep`` is allowed under that directory.
+**/.claude/prompt-history/
+**/.claude/skill-suggestions/
+**/.claude/skills/*
+!**/.claude/skills/.gitkeep
+**/.claude/settings.local.json
