@@ -1,5 +1,7 @@
 <div align="center">
 
+<img width="2752" height="1536" alt="나만의 똑똑한 AI 스킬 생성기" src="https://github.com/user-attachments/assets/2f48db31-b1cb-4879-85d2-cfc11147fa90" /><br>
+
 <img src="https://img.shields.io/badge/🛠️-Claude%20Skill%20Factory-7c3aed?style=for-the-badge" alt="Claude Skill Factory" />
 
 # Claude Skill Factory
